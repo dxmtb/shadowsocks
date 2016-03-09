@@ -70,6 +70,7 @@ STAGE_UDP_ASSOC = 2
 STAGE_DNS = 3
 STAGE_CONNECTING = 4
 STAGE_STREAM = 5
+STAGE_AUTH = 6
 STAGE_DESTROYED = -1
 
 # for each handler, we have 2 stream directions:
@@ -221,6 +222,25 @@ class TCPRelayHandler(object):
             else:
                 logging.error('write_all_to_sock:unknown socket')
         return True
+
+    def _handle_auth(self, data):
+        data_s = ":".join("{:02x}".format(ord(c)) for c in data)
+        try:
+            username_len = common.ord(data[1])
+            username = data[2:2+username_len]
+            password_len = common.ord(data[2+username_len])
+            password = data[2+username_len+1:3+username_len+password_len]
+            if self._config['password'] == password:
+                self._write_to_sock(b'\x05\x00', self._local_sock)
+                self._stage = STAGE_ADDR
+            else:
+                self._write_to_sock(b'\x05\x01', self._local_sock)
+                logging.error('Auth failure, data: %s' % (data_s))
+                self.destroy()
+        except Exception as e:
+            self._log_error('%s data: %s len: %d' % (e, data_s, len(data)))
+            traceback.print_exc()
+            self.destroy()
 
     def _handle_stage_connecting(self, data):
         if self._is_local:
@@ -412,9 +432,11 @@ class TCPRelayHandler(object):
             return
         elif is_local and self._stage == STAGE_INIT:
             # TODO check auth method
-            self._write_to_sock(b'\x05\00', self._local_sock)
-            self._stage = STAGE_ADDR
+            self._write_to_sock(b'\x05\02', self._local_sock)
+            self._stage = STAGE_AUTH
             return
+        elif is_local and self._stage == STAGE_AUTH:
+            self._handle_auth(data)
         elif self._stage == STAGE_CONNECTING:
             self._handle_stage_connecting(data)
         elif (is_local and self._stage == STAGE_ADDR) or \
